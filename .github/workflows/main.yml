@@ -1,0 +1,145 @@
+This is a production-ready GitHub Actions workflow designed for a Python 3.8 application. It follows DevOps best practices, including **job separation**, **dependency caching**, **multi-tagging** (SHA and latest), and **secure secret handling**.
+
+### Prerequisites
+In your GitHub Repository, go to **Settings > Secrets and variables > Actions** and add the following secrets:
+1. `DOCKERHUB_USERNAME`: Your Docker Hub username.
+2. `DOCKERHUB_TOKEN`: Your Docker Hub Personal Access Token (PAT).
+
+---
+
+### The Workflow YAML: `.github/workflows/pipeline.yml`
+
+```yaml
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # Job 1: Linting and Testing
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
+          # Caching pip dependencies speeds up subsequent runs
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Install testing tools
+          pip install pytest flake8
+
+      - name: Lint with flake8
+        run: |
+          # Stop the build if there are Python syntax errors or undefined names
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Run Tests
+        run: |
+          pytest
+
+  # Job 2: Build and Push Docker Image
+  # This job only runs if the 'test' job passes and we are on the main branch
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          install: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/my-ai-app-1
+          # Automatically generates tags: 'latest' and 'sha-xxxxxxx'
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # References tags from the metadata step
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Optimized: Use GitHub Actions cache for Docker layers
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+```
+
+---
+
+### Key Features and Best Practices Included:
+
+1.  **Dependency Caching**: Used `actions/setup-python` with `cache: 'pip'`. This reduces build time significantly by not downloading the same packages repeatedly.
+2.  **Docker Layer Caching**: Included `cache-from` and `cache-to` using the `gha` (GitHub Actions) exporter. This makes your Docker builds much faster by reusing layers from previous runs.
+3.  **Buildx Setup**: Uses `docker/setup-buildx-action`, which is the modern standard for Docker builds, supporting multi-platform builds and advanced caching.
+4.  **Strict Sequencing**: The `build-and-push` job includes `needs: test`. This ensures that broken code is never packaged into a Docker image or pushed to your registry.
+5.  **Multi-Tagging**: It pushes both the `latest` tag and a unique `sha-long` tag. 
+    *   *Production Tip:* In a real production environment, you should deploy using the specific SHA tag to ensure immutability and easy rollbacks.
+6.  **Security**: 
+    *   Used `actions/checkout@v4` and `docker/build-push-action@v5` (latest stable versions).
+    *   Credentials are never hardcoded; they are managed via GitHub Secrets.
+7.  **Linting**: Included a `flake8` step to catch syntax errors before running tests, which is standard for production Python codebases.
+
+### Example `Dockerfile` (for context)
+To ensure the pipeline works perfectly, your project should have a `Dockerfile` in the root similar to this:
+
+```dockerfile
+# Use official lightweight Python image
+FROM python:3.8-slim
+
+# Set working directory
+WORKDIR /app
+
+# Prevent Python from writing .pyc files and enable unbuffered logging
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy project files
+COPY . .
+
+# Non-root user for security
+RUN useradd -m myuser
+USER myuser
+
+# Execution command
+CMD ["python", "main.py"]
+```
