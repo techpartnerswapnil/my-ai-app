@@ -11,10 +11,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
+      - name: Set up Python 3.8
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: '3.8'
 
       - name: Install dependencies
         run: |
@@ -27,15 +27,7 @@ jobs:
 
       - name: Build the project
         run: |
-          python setup.py sdist bdist_wheel
-
-      - name: Cache dependencies
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          python setup.py sdist
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -43,10 +35,10 @@ jobs:
           context: .
           push: true
           tags: |
-            my-app-1:latest
-          cache-from: type=docker,ref=my-app-1:latest
-          cache-to: type=docker,paths=./target
+            my-app-ai:latest
+          cache-from: type=local,paths=/.docker/cache
+          cache-to: type=local,paths=/.docker/cache
           dockerfile: Dockerfile
-          secrets: |
-            DOCKER_USERNAME=${{ secrets.DOCKER_USERNAME }}
-            DOCKER_PASSWORD=${{ secrets.DOCKER_PASSWORD }}
+          login: true
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
